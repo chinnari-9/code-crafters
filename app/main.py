@@ -1,8 +1,11 @@
 import socket
 import threading
+import time
+from datetime import datetime, timedelta
 
-# In-memory storage for key-value pairs
+# In-memory storage for key-value pairs and expiries
 storage = {}
+expiry_times = {}  # Stores expiration times for keys
 
 
 def parse_resp(request: bytes):
@@ -53,22 +56,9 @@ def handle_client(client_socket, client_address):
                 else:
                     response = "-Error: ECHO requires exactly one argument\r\n"
             elif args[0].upper() == "SET":
-                if len(args) == 3:
-                    key, value = args[1], args[2]
-                    storage[key] = value
-                    response = "+OK\r\n"
-                else:
-                    response = "-Error: SET requires exactly two arguments\r\n"
+                response = handle_set(args)
             elif args[0].upper() == "GET":
-                if len(args) == 2:
-                    key = args[1]
-                    if key in storage:
-                        value = storage[key]
-                        response = f"${len(value)}\r\n{value}\r\n"
-                    else:
-                        response = "$-1\r\n"  # RESP null bulk string for non-existent keys
-                else:
-                    response = "-Error: GET requires exactly one argument\r\n"
+                response = handle_get(args)
             else:
                 response = "-Error: Unknown Command\r\n"
 
@@ -82,10 +72,77 @@ def handle_client(client_socket, client_address):
         print(f"Connection with {client_address} closed.")
 
 
+def handle_set(args):
+    """
+    Handle the SET command with optional PX argument.
+    """
+    if len(args) < 3:
+        return "-Error: SET requires at least two arguments\r\n"
+
+    key, value = args[1], args[2]
+    expiry = None
+
+    if len(args) > 3 and args[3].upper() == "PX":
+        if len(args) < 5:
+            return "-Error: PX requires a value in milliseconds\r\n"
+        try:
+            expiry = int(args[4])
+            expiry_time = datetime.now() + timedelta(milliseconds=expiry)
+            expiry_times[key] = expiry_time
+        except ValueError:
+            return "-Error: PX value must be an integer\r\n"
+
+    storage[key] = value
+    if key not in expiry_times:
+        expiry_times.pop(key, None)  # Clear expiry if no PX is provided
+    return "+OK\r\n"
+
+
+def handle_get(args):
+    """
+    Handle the GET command and check for expired keys.
+    """
+    if len(args) != 2:
+        return "-Error: GET requires exactly one argument\r\n"
+
+    key = args[1]
+
+    # Check if key exists and has expired
+    if key in expiry_times:
+        if datetime.now() >= expiry_times[key]:
+            del storage[key]
+            del expiry_times[key]
+            return "$-1\r\n"  # RESP null bulk string
+
+    # Return the value if the key exists
+    if key in storage:
+        value = storage[key]
+        return f"${len(value)}\r\n{value}\r\n"
+
+    return "$-1\r\n"  # RESP null bulk string for non-existent keys
+
+
+def expiry_cleaner():
+    """
+    Periodically clean up expired keys.
+    """
+    while True:
+        time.sleep(0.1)  # Check every 100ms
+        now = datetime.now()
+        keys_to_delete = [key for key, expiry in expiry_times.items() if now >= expiry]
+        for key in keys_to_delete:
+            del storage[key]
+            del expiry_times[key]
+
+
 def main():
     # Create the server socket and bind to port 6379
     server_socket = socket.create_server(("localhost", 6379), reuse_port=True)
     print("Server is running and waiting for connections on port 6379")
+
+    # Start the expiry cleaner thread
+    cleaner_thread = threading.Thread(target=expiry_cleaner, daemon=True)
+    cleaner_thread.start()
 
     while True:
         # Accept a new client
