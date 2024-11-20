@@ -1,5 +1,5 @@
 import socket
-import threading  # Import threading for handling multiple clients
+import threading
 
 
 def handle_client(client_socket, client_address):
@@ -18,9 +18,19 @@ def handle_client(client_socket, client_address):
             data: str = request.decode().strip()
             print(f"Received from {client_address}: {data}")
 
-            # Handle PING command
-            if "ping" in data.lower():
+            # Parse the RESP input
+            if data.startswith("PING"):
+                # Respond to PING command
                 response = "+PONG\r\n"
+                client_socket.send(response.encode())
+            elif data.startswith("ECHO"):
+                # Extract the argument for the ECHO command
+                try:
+                    _, message = data.split(maxsplit=1)
+                    response = f"${len(message)}\r\n{message}\r\n"
+                except ValueError:
+                    # Handle case where ECHO is sent without arguments
+                    response = "-Error: ECHO requires an argument\r\n"
                 client_socket.send(response.encode())
             else:
                 # Handle unknown commands
