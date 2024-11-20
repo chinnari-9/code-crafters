@@ -1,6 +1,9 @@
 import socket
 import threading
 
+# In-memory storage for key-value pairs
+storage = {}
+
 
 def parse_resp(request: bytes):
     """
@@ -49,6 +52,23 @@ def handle_client(client_socket, client_address):
                     response = f"${len(message)}\r\n{message}\r\n"
                 else:
                     response = "-Error: ECHO requires exactly one argument\r\n"
+            elif args[0].upper() == "SET":
+                if len(args) == 3:
+                    key, value = args[1], args[2]
+                    storage[key] = value
+                    response = "+OK\r\n"
+                else:
+                    response = "-Error: SET requires exactly two arguments\r\n"
+            elif args[0].upper() == "GET":
+                if len(args) == 2:
+                    key = args[1]
+                    if key in storage:
+                        value = storage[key]
+                        response = f"${len(value)}\r\n{value}\r\n"
+                    else:
+                        response = "$-1\r\n"  # RESP null bulk string for non-existent keys
+                else:
+                    response = "-Error: GET requires exactly one argument\r\n"
             else:
                 response = "-Error: Unknown Command\r\n"
 
