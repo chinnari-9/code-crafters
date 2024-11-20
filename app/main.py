@@ -1,15 +1,19 @@
 import socket  # noqa: F401
 
-
 def main():
-    # You can use print statements as follows for debugging, they'll be visible when running tests.
+    # Print debug logs (optional, visible when running tests)
     print("Logs from your program will appear here!")
 
-    # Uncomment this to pass the first stage
-    #
-    # server_socket = socket.create_server(("localhost", 6379), reuse_port=True)
-    # server_socket.accept() # wait for client
+    # Uncomment and fix to bind to the required port
+    server_socket = socket.create_server(("localhost", 6379), reuse_port=True)
+    print("Server is running and waiting for connections on port 6379")
 
+    # Wait for a client to connect (this is required to pass the stage)
+    client_socket, client_address = server_socket.accept()
+    print(f"Accepted connection from {client_address}")
+
+    # Keep the program running (or close client after testing)
+    client_socket.close()
 
 if __name__ == "__main__":
     main()
