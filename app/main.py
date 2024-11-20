@@ -11,7 +11,7 @@ def main():
     # Wait for a client to connect (this is required to pass the stage)
     client_socket, client_address = server_socket.accept()
     print(f"Accepted connection from {client_address}")
-
+    client_socket.send(b"+PONG\r\n")
     # Keep the program running (or close client after testing)
     client_socket.close()
 
