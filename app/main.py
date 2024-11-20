@@ -1,11 +1,16 @@
 import socket
 import threading
-import time
 from datetime import datetime, timedelta
 
 # In-memory storage for key-value pairs and expiries
 storage = {}
 expiry_times = {}  # Stores expiration times for keys
+
+# Configuration parameters
+config = {
+    "dir": "/tmp/redis-data",
+    "dbfilename": "rdbfile"
+}
 
 
 def parse_resp(request: bytes):
@@ -49,16 +54,8 @@ def handle_client(client_socket, client_address):
                 response = "-Error: Invalid RESP format\r\n"
             elif args[0].upper() == "PING":
                 response = "+PONG\r\n"
-            elif args[0].upper() == "ECHO":
-                if len(args) == 2:
-                    message = args[1]
-                    response = f"${len(message)}\r\n{message}\r\n"
-                else:
-                    response = "-Error: ECHO requires exactly one argument\r\n"
-            elif args[0].upper() == "SET":
-                response = handle_set(args)
-            elif args[0].upper() == "GET":
-                response = handle_get(args)
+            elif args[0].upper() == "CONFIG":
+                response = handle_config(args)
             else:
                 response = "-Error: Unknown Command\r\n"
 
@@ -72,77 +69,32 @@ def handle_client(client_socket, client_address):
         print(f"Connection with {client_address} closed.")
 
 
-def handle_set(args):
+def handle_config(args):
     """
-    Handle the SET command with optional PX argument.
+    Handle the CONFIG GET command.
     """
-    if len(args) < 3:
-        return "-Error: SET requires at least two arguments\r\n"
+    if len(args) < 2 or args[1].upper() != "GET":
+        return "-Error: Only CONFIG GET is supported\r\n"
 
-    key, value = args[1], args[2]
-    expiry = None
+    if len(args) != 3:
+        return "-Error: CONFIG GET requires exactly one parameter\r\n"
 
-    if len(args) > 3 and args[3].upper() == "PX":
-        if len(args) < 5:
-            return "-Error: PX requires a value in milliseconds\r\n"
-        try:
-            expiry = int(args[4])
-            expiry_time = datetime.now() + timedelta(milliseconds=expiry)
-            expiry_times[key] = expiry_time
-        except ValueError:
-            return "-Error: PX value must be an integer\r\n"
+    param = args[2]
+    if param in config:
+        value = config[param]
+        # Return key-value pair as RESP array
+        response = f"*2\r\n${len(param)}\r\n{param}\r\n${len(value)}\r\n{value}\r\n"
+    else:
+        # Return an empty RESP array if the parameter is unknown
+        response = "*0\r\n"
 
-    storage[key] = value
-    if key not in expiry_times:
-        expiry_times.pop(key, None)  # Clear expiry if no PX is provided
-    return "+OK\r\n"
-
-
-def handle_get(args):
-    """
-    Handle the GET command and check for expired keys.
-    """
-    if len(args) != 2:
-        return "-Error: GET requires exactly one argument\r\n"
-
-    key = args[1]
-
-    # Check if key exists and has expired
-    if key in expiry_times:
-        if datetime.now() >= expiry_times[key]:
-            del storage[key]
-            del expiry_times[key]
-            return "$-1\r\n"  # RESP null bulk string
-
-    # Return the value if the key exists
-    if key in storage:
-        value = storage[key]
-        return f"${len(value)}\r\n{value}\r\n"
-
-    return "$-1\r\n"  # RESP null bulk string for non-existent keys
-
-
-def expiry_cleaner():
-    """
-    Periodically clean up expired keys.
-    """
-    while True:
-        time.sleep(0.1)  # Check every 100ms
-        now = datetime.now()
-        keys_to_delete = [key for key, expiry in expiry_times.items() if now >= expiry]
-        for key in keys_to_delete:
-            del storage[key]
-            del expiry_times[key]
+    return response
 
 
 def main():
     # Create the server socket and bind to port 6379
     server_socket = socket.create_server(("localhost", 6379), reuse_port=True)
     print("Server is running and waiting for connections on port 6379")
-
-    # Start the expiry cleaner thread
-    cleaner_thread = threading.Thread(target=expiry_cleaner, daemon=True)
-    cleaner_thread.start()
 
     while True:
         # Accept a new client
