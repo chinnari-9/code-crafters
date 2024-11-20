@@ -2,6 +2,26 @@ import socket
 import threading
 
 
+def parse_resp(request: bytes):
+    """
+    Parse a RESP request and extract the command and arguments.
+    """
+    try:
+        lines = request.decode().split("\r\n")
+        if lines[0].startswith("*"):  # Check for RESP array
+            arg_count = int(lines[0][1:])  # Number of arguments
+            args = []
+            for i in range(1, len(lines) - 1, 2):
+                if lines[i].startswith("$"):
+                    args.append(lines[i + 1])
+            if len(args) == arg_count:
+                return args
+        return None
+    except Exception as e:
+        print(f"Error parsing RESP: {e}")
+        return None
+
+
 def handle_client(client_socket, client_address):
     """
     Handle communication with a single client.
@@ -14,28 +34,26 @@ def handle_client(client_socket, client_address):
             if not request:  # If the client closes the connection
                 print(f"Client {client_address} disconnected.")
                 break
-            
-            data: str = request.decode().strip()
-            print(f"Received from {client_address}: {data}")
 
-            # Parse the RESP input
-            if data.startswith("PING"):
-                # Respond to PING command
+            print(f"Received from {client_address}: {request.decode()}")
+
+            # Parse the RESP request
+            args = parse_resp(request)
+            if not args:
+                response = "-Error: Invalid RESP format\r\n"
+            elif args[0].upper() == "PING":
                 response = "+PONG\r\n"
-                client_socket.send(response.encode())
-            elif data.startswith("ECHO"):
-                # Extract the argument for the ECHO command
-                try:
-                    _, message = data.split(maxsplit=1)
+            elif args[0].upper() == "ECHO":
+                if len(args) == 2:
+                    message = args[1]
                     response = f"${len(message)}\r\n{message}\r\n"
-                except ValueError:
-                    # Handle case where ECHO is sent without arguments
-                    response = "-Error: ECHO requires an argument\r\n"
-                client_socket.send(response.encode())
+                else:
+                    response = "-Error: ECHO requires exactly one argument\r\n"
             else:
-                # Handle unknown commands
                 response = "-Error: Unknown Command\r\n"
-                client_socket.send(response.encode())
+
+            # Send the response
+            client_socket.send(response.encode())
 
     except Exception as e:
         print(f"Error with client {client_address}: {e}")
