@@ -1,104 +1,121 @@
-import asyncio
-import argparse
 import socket
-from enum import Enum
+import threading
+import time
+import argparse
 
-# Placeholder for Constants and Data Types
-class DataType(Enum):
-    ARRAY = 1
-    BULK_STRING = 2
-    SIMPLE_ERROR = 3
+# Configuration parameters with default values
+config = {
+    "dir": "/tmp/redis-data",
+    "dbfilename": "rdbfile"
+}
 
-class Constant:
-    INVALID_COMMAND = "ERR unknown command"
+# In-memory key-value store with expiry handling
+db = {}
+expiry_db = {}
 
-# Global configuration variables
-dir = None
-dbfilename = None
-replication = {'role': 'master', 'master_replid': '8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb', 'master_repl_offset': 0}
-
-async def encode(data_type, data):
+def parse_resp(request: bytes):
     """
-    Simulate RESP encoding for various data types (Array, Bulk String, Error).
+    Parse a RESP request and extract the command and arguments.
     """
-    if data_type == DataType.ARRAY:
-        return f"*{len(data)}\r\n" + ''.join([f"${len(d)}\r\n{d}\r\n" for d in data])
-    elif data_type == DataType.BULK_STRING:
-        return f"${len(data)}\r\n{data}\r\n"
-    elif data_type == DataType.SIMPLE_ERROR:
-        return f"-{data}\r\n"
-    return None
+    try:
+        lines = request.decode().split("\r\n")
+        if lines[0].startswith("*"):  # Check for RESP array
+            arg_count = int(lines[0][1:])  # Number of arguments
+            args = []
+            for i in range(1, len(lines) - 1, 2):
+                if lines[i].startswith("$"):
+                    args.append(lines[i + 1])
+            if len(args) == arg_count:
+                return args
+        return None
+    except Exception as e:
+        print(f"Error parsing RESP: {e}")
+        return None
 
-async def handle_command(commands, writer):
-    """
-    Handle incoming commands and provide responses.
-    """
-    response = None
-    if commands[0].upper() == 'CONFIG':
-        if len(commands) >= 3:
-            if commands[1].lower() == 'get' and commands[2].lower() == 'dir':
-                # Respond with the 'dir' configuration
-                response = await encode(DataType.ARRAY, [await encode(DataType.BULK_STRING, "dir".encode()), await encode(DataType.BULK_STRING, dir.encode())])
-            elif commands[1].lower() == 'get' and commands[2].lower() == 'dbfilename':
-                # Respond with the 'dbfilename' configuration
-                response = await encode(DataType.ARRAY, [await encode(DataType.BULK_STRING, "dbfilename".encode()), await encode(DataType.BULK_STRING, dbfilename.encode())])
-            else:
-                # Invalid CONFIG GET parameter
-                response = await encode(DataType.SIMPLE_ERROR, Constant.INVALID_COMMAND)
-        else:
-            # Invalid CONFIG GET command structure
-            response = await encode(DataType.SIMPLE_ERROR, Constant.INVALID_COMMAND)
 
-    if writer and response is not None:
-        writer.write(response.encode())
-        await writer.drain()
-
-async def start_server(port):
-    """
-    Start the Redis server and handle client connections.
-    """
-    server = await asyncio.start_server(handle_client, 'localhost', port)
-    print(f'Server is running and waiting for connections on port {port}')
-    async with server:
-        await server.serve_forever()
-
-async def handle_client(reader, writer):
+def handle_client(client_socket, client_address):
     """
     Handle communication with a single client.
     """
-    data = await reader.read(100)
-    message = data.decode()
-    addr = writer.get_extra_info('peername')
-    print(f"Received {message} from {addr}")
+    print(f"New thread started for client: {client_address}")
+    try:
+        while True:
+            # Receive data from the client
+            request: bytes = client_socket.recv(512)
+            if not request:  # If the client closes the connection
+                print(f"Client {client_address} disconnected.")
+                break
 
-    # Simple command parsing (splitting by spaces)
-    commands = message.strip().split()
-    await handle_command(commands, writer)
+            print(f"Received from {client_address}: {request.decode()}")
+
+            # Parse the RESP request
+            args = parse_resp(request)
+            if not args:
+                response = "-Error: Invalid RESP format\r\n"
+            elif args[0].upper() == "SET":
+                response = handle_set(args)
+            else:
+                response = "-Error: Unknown Command\r\n"
+
+            # Send the response
+            client_socket.send(response.encode())
+
+    except Exception as e:
+        print(f"Error with client {client_address}: {e}")
+    finally:
+        client_socket.close()
+        print(f"Connection with {client_address} closed.")
+
+
+def handle_set(args):
+    """
+    Handle the SET command with optional PX argument for expiry.
+    """
+    if len(args) < 4 or args[2].upper() != "PX":
+        # Simple SET command without expiry
+        db[args[1]] = args[2]
+        response = "+OK\r\n"
+    else:
+        # SET with PX (expiry)
+        key = args[1]
+        value = args[2]
+        expiry_time = int(args[3])  # in milliseconds
+
+        # Store the value and expiry time
+        db[key] = value
+        expiry_db[key] = time.time() + (expiry_time / 1000)  # store expiry time in seconds
+
+        response = "+OK\r\n"
     
-    print(f"Closing connection with {addr}")
-    writer.close()
-    await writer.wait_closed()
+    return response
+
 
 def main():
     # Parse command-line arguments
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-p', '--port', type=int, default=6379)
-    parser.add_argument('--replicaof', nargs=2, type=str)
-    parser.add_argument('--dir', type=str)
-    parser.add_argument('--dbfilename', type=str)
+    parser = argparse.ArgumentParser(description="Redis server implementation")
+    parser.add_argument("--dir", type=str, default="/tmp/redis-data", help="Directory for RDB files")
+    parser.add_argument("--dbfilename", type=str, default="rdbfile", help="Name of the RDB file")
     args = parser.parse_args()
 
-    # Update global dir and dbfilename based on args
-    global dir, dbfilename
-    if args.dir:
-        dir = args.dir
-    if args.dbfilename:
-        dbfilename = args.dbfilename
+    # Update configuration with command-line arguments
+    config["dir"] = args.dir
+    config["dbfilename"] = args.dbfilename
 
-    print(f"Configuration: dir={dir}, dbfilename={dbfilename}")
+    print(f"Configuration: dir={config['dir']}, dbfilename={config['dbfilename']}")
 
-    # Start the server
-    asyncio.run(start_server(args.port))
+    # Create the server socket and bind to port 6379
+    server_socket = socket.create_server(("localhost", 6379), reuse_port=True)
+    print("Server is running and waiting for connections on port 6379")
 
-if __name__ == '__main__':
+    while True:
+        # Accept a new client
+        client_socket, client_address = server_socket.accept()
+        print(f"Accepted connection from {client_address}")
+
+        # Create a new thread for each client
+        client_thread = threading.Thread(target=handle_client, args=(client_socket, client_address))
+        client_thread.start()
+
+
+if __name__ == "__main__":
     main()
