@@ -1,12 +1,8 @@
 import socket
 import threading
-from datetime import datetime, timedelta
+import argparse  # For parsing command-line arguments
 
-# In-memory storage for key-value pairs and expiries
-storage = {}
-expiry_times = {}  # Stores expiration times for keys
-
-# Configuration parameters
+# Configuration parameters with default values
 config = {
     "dir": "/tmp/redis-data",
     "dbfilename": "rdbfile"
@@ -52,8 +48,6 @@ def handle_client(client_socket, client_address):
             args = parse_resp(request)
             if not args:
                 response = "-Error: Invalid RESP format\r\n"
-            elif args[0].upper() == "PING":
-                response = "+PONG\r\n"
             elif args[0].upper() == "CONFIG":
                 response = handle_config(args)
             else:
@@ -92,6 +86,18 @@ def handle_config(args):
 
 
 def main():
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Redis server implementation")
+    parser.add_argument("--dir", type=str, default="/tmp/redis-data", help="Directory for RDB files")
+    parser.add_argument("--dbfilename", type=str, default="rdbfile", help="Name of the RDB file")
+    args = parser.parse_args()
+
+    # Update configuration with command-line arguments
+    config["dir"] = args.dir
+    config["dbfilename"] = args.dbfilename
+
+    print(f"Configuration: dir={config['dir']}, dbfilename={config['dbfilename']}")
+
     # Create the server socket and bind to port 6379
     server_socket = socket.create_server(("localhost", 6379), reuse_port=True)
     print("Server is running and waiting for connections on port 6379")
