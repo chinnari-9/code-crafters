@@ -1,6 +1,7 @@
 import socket
 import threading
-import argparse  # For parsing command-line arguments
+import time
+import argparse
 
 # Configuration parameters with default values
 config = {
@@ -8,6 +9,9 @@ config = {
     "dbfilename": "rdbfile"
 }
 
+# In-memory key-value store with expiry handling
+db = {}
+expiry_db = {}
 
 def parse_resp(request: bytes):
     """
@@ -48,8 +52,8 @@ def handle_client(client_socket, client_address):
             args = parse_resp(request)
             if not args:
                 response = "-Error: Invalid RESP format\r\n"
-            elif args[0].upper() == "CONFIG":
-                response = handle_config(args)
+            elif args[0].upper() == "SET":
+                response = handle_set(args)
             else:
                 response = "-Error: Unknown Command\r\n"
 
@@ -63,25 +67,26 @@ def handle_client(client_socket, client_address):
         print(f"Connection with {client_address} closed.")
 
 
-def handle_config(args):
+def handle_set(args):
     """
-    Handle the CONFIG GET command.
+    Handle the SET command with optional PX argument for expiry.
     """
-    if len(args) < 2 or args[1].upper() != "GET":
-        return "-Error: Only CONFIG GET is supported\r\n"
-
-    if len(args) != 3:
-        return "-Error: CONFIG GET requires exactly one parameter\r\n"
-
-    param = args[2]
-    if param in config:
-        value = config[param]
-        # Return key-value pair as RESP array
-        response = f"*2\r\n${len(param)}\r\n{param}\r\n${len(value)}\r\n{value}\r\n"
+    if len(args) < 4 or args[2].upper() != "PX":
+        # Simple SET command without expiry
+        db[args[1]] = args[2]
+        response = "+OK\r\n"
     else:
-        # Return an empty RESP array if the parameter is unknown
-        response = "*0\r\n"
+        # SET with PX (expiry)
+        key = args[1]
+        value = args[2]
+        expiry_time = int(args[3])  # in milliseconds
 
+        # Store the value and expiry time
+        db[key] = value
+        expiry_db[key] = time.time() + (expiry_time / 1000)  # store expiry time in seconds
+
+        response = "+OK\r\n"
+    
     return response
 
 
