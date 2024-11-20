@@ -54,6 +54,8 @@ def handle_client(client_socket, client_address):
                 response = "-Error: Invalid RESP format\r\n"
             elif args[0].upper() == "SET":
                 response = handle_set(args)
+            elif args[0].upper() == "CONFIG" and args[1].upper() == "GET":
+                response = handle_config_get(args)
             else:
                 response = "-Error: Unknown Command\r\n"
 
@@ -87,6 +89,28 @@ def handle_set(args):
 
         response = "+OK\r\n"
     
+    return response
+
+
+def handle_config_get(args):
+    """
+    Handle the CONFIG GET command.
+    """
+    if len(args) != 3:
+        return "-Error: Invalid number of arguments for CONFIG GET\r\n"
+
+    # Handle 'CONFIG GET dir'
+    if args[2].lower() == "dir":
+        response = "*2\r\n$3\r\ndir\r\n$" + str(len(config["dir"])) + "\r\n" + config["dir"] + "\r\n"
+    
+    # Handle 'CONFIG GET dbfilename'
+    elif args[2].lower() == "dbfilename":
+        response = "*2\r\n$10\r\ndbfilename\r\n$" + str(len(config["dbfilename"])) + "\r\n" + config["dbfilename"] + "\r\n"
+    
+    else:
+        # Handle invalid config request
+        response = "-Error: Unknown CONFIG parameter\r\n"
+
     return response
 
 
