@@ -1,17 +1,17 @@
 import socket
 import threading
-import time
-import argparse
+from datetime import datetime, timedelta
 
-# Configuration parameters with default values
+# In-memory storage for key-value pairs and expiries
+storage = {}
+expiry_times = {}  # Stores expiration times for keys
+
+# Configuration parameters
 config = {
     "dir": "/tmp/redis-data",
     "dbfilename": "rdbfile"
 }
 
-# In-memory key-value store with expiry handling
-db = {}
-expiry_db = {}
 
 def parse_resp(request: bytes):
     """
@@ -52,8 +52,10 @@ def handle_client(client_socket, client_address):
             args = parse_resp(request)
             if not args:
                 response = "-Error: Invalid RESP format\r\n"
-            elif args[0].upper() == "SET":
-                response = handle_set(args)
+            elif args[0].upper() == "PING":
+                response = "+PONG\r\n"
+            elif args[0].upper() == "CONFIG":
+                response = handle_config(args)
             else:
                 response = "-Error: Unknown Command\r\n"
 
@@ -67,42 +69,29 @@ def handle_client(client_socket, client_address):
         print(f"Connection with {client_address} closed.")
 
 
-def handle_set(args):
+def handle_config(args):
     """
-    Handle the SET command with optional PX argument for expiry.
+    Handle the CONFIG GET command.
     """
-    if len(args) < 4 or args[2].upper() != "PX":
-        # Simple SET command without expiry
-        db[args[1]] = args[2]
-        response = "+OK\r\n"
+    if len(args) < 2 or args[1].upper() != "GET":
+        return "-Error: Only CONFIG GET is supported\r\n"
+
+    if len(args) != 3:
+        return "-Error: CONFIG GET requires exactly one parameter\r\n"
+
+    param = args[2]
+    if param in config:
+        value = config[param]
+        # Return key-value pair as RESP array
+        response = f"*2\r\n${len(param)}\r\n{param}\r\n${len(value)}\r\n{value}\r\n"
     else:
-        # SET with PX (expiry)
-        key = args[1]
-        value = args[2]
-        expiry_time = int(args[3])  # in milliseconds
+        # Return an empty RESP array if the parameter is unknown
+        response = "*0\r\n"
 
-        # Store the value and expiry time
-        db[key] = value
-        expiry_db[key] = time.time() + (expiry_time / 1000)  # store expiry time in seconds
-
-        response = "+OK\r\n"
-    
     return response
 
 
 def main():
-    # Parse command-line arguments
-    parser = argparse.ArgumentParser(description="Redis server implementation")
-    parser.add_argument("--dir", type=str, default="/tmp/redis-data", help="Directory for RDB files")
-    parser.add_argument("--dbfilename", type=str, default="rdbfile", help="Name of the RDB file")
-    args = parser.parse_args()
-
-    # Update configuration with command-line arguments
-    config["dir"] = args.dir
-    config["dbfilename"] = args.dbfilename
-
-    print(f"Configuration: dir={config['dir']}, dbfilename={config['dbfilename']}")
-
     # Create the server socket and bind to port 6379
     server_socket = socket.create_server(("localhost", 6379), reuse_port=True)
     print("Server is running and waiting for connections on port 6379")
